@@ -137,7 +137,9 @@ void AudioStreamer::ConnectToWebSocket()
 void AudioStreamer::DisconnectFromWebSocket()
 {
 	if (m_wsClient) {
-		m_wsClient->SendControlMessage("stop");
+		if (!m_rawPcmMode) {
+			m_wsClient->SendControlMessage("stop");
+		}
 		m_wsClient->Disconnect();
 	}
 }
@@ -336,13 +338,56 @@ void AudioStreamer::ProcessAudioData(obs_source_t *source, const struct audio_da
 	}
 
 	if (m_wsClient) {
-		m_wsClient->SendAudioData(chunk);
+		if (m_rawPcmMode) {
+			// Raw PCM mode: downmix to mono + resample to 16kHz for WhisperLiveKit
+			// First, downmix to mono by averaging all channels
+			std::vector<int16_t> mono_samples(frames);
+			for (size_t i = 0; i < frames; ++i) {
+				float sum = 0.0f;
+				for (size_t ch = 0; ch < channels; ++ch) {
+					const float *in_ptr = reinterpret_cast<const float *>(audio_data->data[ch]);
+					sum += in_ptr[i];
+				}
+				float avg = sum / static_cast<float>(channels);
+				avg = (std::max)(-1.0f, (std::min)(1.0f, avg));
+				mono_samples[i] = static_cast<int16_t>(std::round(avg * 32767.0f));
+			}
+
+			// Resample from source rate to 16kHz using simple decimation
+			constexpr uint32_t target_rate = 16000;
+			if (sample_rate != target_rate && sample_rate > target_rate) {
+				double ratio = static_cast<double>(sample_rate) / target_rate;
+				size_t out_frames = static_cast<size_t>(frames / ratio);
+				std::vector<int16_t> resampled(out_frames);
+				for (size_t i = 0; i < out_frames; ++i) {
+					size_t src_idx = static_cast<size_t>(i * ratio);
+					if (src_idx >= frames)
+						src_idx = frames - 1;
+					resampled[i] = mono_samples[src_idx];
+				}
+				m_wsClient->SendRawAudioData(reinterpret_cast<const uint8_t *>(resampled.data()),
+							     resampled.size() * sizeof(int16_t));
+				UpdateDataRate(resampled.size() * sizeof(int16_t));
+			} else {
+				// Already at target rate or below, send as-is
+				m_wsClient->SendRawAudioData(reinterpret_cast<const uint8_t *>(mono_samples.data()),
+							     mono_samples.size() * sizeof(int16_t));
+				UpdateDataRate(mono_samples.size() * sizeof(int16_t));
+			}
+		} else {
+			m_wsClient->SendAudioData(chunk);
+			UpdateDataRate(data_size);
+		}
+	} else {
+		UpdateDataRate(data_size);
 	}
-	UpdateDataRate(data_size);
 }
 
 void AudioStreamer::OnWebSocketConnected()
 {
+	if (!m_rawPcmMode && m_wsClient) {
+		m_wsClient->SendControlMessage("start");
+	}
 	emit connectionStatusChanged(true);
 }
 

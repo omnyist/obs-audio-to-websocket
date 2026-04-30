@@ -84,7 +84,8 @@ private:
 
 	OBSSourceWrapper m_audioSource;
 	std::string m_audioSourceName;
-	std::string m_wsUrl = "ws://localhost:8889/audio";
+	std::string m_wsUrl = "ws://zelan:8765/asr";
+	bool m_rawPcmMode{true}; // Send 16kHz mono PCM without header (for WhisperLiveKit)
 
 	std::atomic<bool> m_streaming{false};
 	std::atomic<bool> m_shuttingDown{false};

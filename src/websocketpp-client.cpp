@@ -241,6 +241,33 @@ void WebSocketPPClient::SendAudioData(const AudioChunk &chunk)
 	}
 }
 
+void WebSocketPPClient::SendRawAudioData(const uint8_t *data, size_t size)
+{
+	if (!m_connected || size == 0)
+		return;
+
+	try {
+		websocketpp::lib::error_code ec;
+		websocketpp::connection_hdl hdl;
+		{
+			std::lock_guard<std::mutex> lock(m_hdlMutex);
+			hdl = m_hdl;
+		}
+		m_client.send(hdl, data, size, websocketpp::frame::opcode::binary, ec);
+
+		if (ec) {
+			std::string errorMessage = ec.message();
+			blog(LOG_ERROR, "[Audio to WebSocket] Failed to send raw audio: %s", errorMessage.c_str());
+			m_connected = false;
+			if (m_onError) {
+				m_onError("Failed to send raw audio: " + errorMessage);
+			}
+		}
+	} catch (const websocketpp::exception &e) {
+		blog(LOG_ERROR, "[Audio to WebSocket] Exception sending raw audio: %s", e.what());
+	}
+}
+
 void WebSocketPPClient::SendControlMessage(const std::string &type)
 {
 	if (!m_connected)
@@ -287,9 +314,6 @@ void WebSocketPPClient::OnOpen(websocketpp::connection_hdl hdl)
 	if (m_onConnected) {
 		m_onConnected();
 	}
-
-	// Send initial control message
-	SendControlMessage("start");
 }
 
 void WebSocketPPClient::OnClose(websocketpp::connection_hdl hdl)

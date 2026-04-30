@@ -37,6 +37,7 @@ public:
 	bool IsConnected() const { return m_connected.load(); }
 
 	void SendAudioData(const AudioChunk &chunk);
+	void SendRawAudioData(const uint8_t *data, size_t size);
 	void SendControlMessage(const std::string &type);
 
 	void SetOnConnected(OnConnectedCallback cb) { m_onConnected = cb; }
