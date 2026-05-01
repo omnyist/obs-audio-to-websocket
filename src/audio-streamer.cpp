@@ -340,40 +340,58 @@ void AudioStreamer::ProcessAudioData(obs_source_t *source, const struct audio_da
 	if (m_wsClient) {
 		if (m_rawPcmMode) {
 			// Raw PCM mode: downmix to mono + resample to 16kHz for WhisperLiveKit
-			// First, downmix to mono by averaging all channels
-			std::vector<int16_t> mono_samples(frames);
+			// Work in float space throughout to avoid quantization artifacts
+
+			// Step 1: Downmix to mono float by averaging all channels
+			std::vector<float> mono_float(frames);
 			for (size_t i = 0; i < frames; ++i) {
 				float sum = 0.0f;
 				for (size_t ch = 0; ch < channels; ++ch) {
 					const float *in_ptr = reinterpret_cast<const float *>(audio_data->data[ch]);
 					sum += in_ptr[i];
 				}
-				float avg = sum / static_cast<float>(channels);
-				avg = (std::max)(-1.0f, (std::min)(1.0f, avg));
-				mono_samples[i] = static_cast<int16_t>(std::round(avg * 32767.0f));
+				mono_float[i] = sum / static_cast<float>(channels);
 			}
 
-			// Resample from source rate to 16kHz using simple decimation
+			// Step 2: Resample from source rate to 16kHz
+			// Use averaging filter to prevent aliasing (box filter over each output sample's span)
 			constexpr uint32_t target_rate = 16000;
+			std::vector<int16_t> output;
+
 			if (sample_rate != target_rate && sample_rate > target_rate) {
 				double ratio = static_cast<double>(sample_rate) / target_rate;
 				size_t out_frames = static_cast<size_t>(frames / ratio);
-				std::vector<int16_t> resampled(out_frames);
+				output.resize(out_frames);
+
 				for (size_t i = 0; i < out_frames; ++i) {
-					size_t src_idx = static_cast<size_t>(i * ratio);
-					if (src_idx >= frames)
-						src_idx = frames - 1;
-					resampled[i] = mono_samples[src_idx];
+					// Average all source samples that map to this output sample
+					size_t src_start = static_cast<size_t>(i * ratio);
+					size_t src_end = static_cast<size_t>((i + 1) * ratio);
+					if (src_end > frames)
+						src_end = frames;
+					if (src_start >= src_end)
+						src_start = src_end > 0 ? src_end - 1 : 0;
+
+					float sum = 0.0f;
+					for (size_t j = src_start; j < src_end; ++j) {
+						sum += mono_float[j];
+					}
+					float avg = sum / static_cast<float>(src_end - src_start);
+					avg = (std::max)(-1.0f, (std::min)(1.0f, avg));
+					output[i] = static_cast<int16_t>(std::round(avg * 32767.0f));
 				}
-				m_wsClient->SendRawAudioData(reinterpret_cast<const uint8_t *>(resampled.data()),
-							     resampled.size() * sizeof(int16_t));
-				UpdateDataRate(resampled.size() * sizeof(int16_t));
 			} else {
-				// Already at target rate or below, send as-is
-				m_wsClient->SendRawAudioData(reinterpret_cast<const uint8_t *>(mono_samples.data()),
-							     mono_samples.size() * sizeof(int16_t));
-				UpdateDataRate(mono_samples.size() * sizeof(int16_t));
+				// Already at target rate or below, just quantize
+				output.resize(frames);
+				for (size_t i = 0; i < frames; ++i) {
+					float s = (std::max)(-1.0f, (std::min)(1.0f, mono_float[i]));
+					output[i] = static_cast<int16_t>(std::round(s * 32767.0f));
+				}
 			}
+
+			m_wsClient->SendRawAudioData(reinterpret_cast<const uint8_t *>(output.data()),
+						     output.size() * sizeof(int16_t));
+			UpdateDataRate(output.size() * sizeof(int16_t));
 		} else {
 			m_wsClient->SendAudioData(chunk);
 			UpdateDataRate(data_size);
