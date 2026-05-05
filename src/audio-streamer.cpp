@@ -343,6 +343,9 @@ void AudioStreamer::ProcessAudioData(obs_source_t *source, const struct audio_da
 			// Work in float space throughout to avoid quantization artifacts
 
 			// Step 1: Downmix to mono float by averaging all channels
+			// Apply gain boost for VAD sensitivity (transcription path only,
+			// does not affect OBS output or stream mix)
+			constexpr float transcription_gain = 4.0f;
 			std::vector<float> mono_float(frames);
 			for (size_t i = 0; i < frames; ++i) {
 				float sum = 0.0f;
@@ -350,7 +353,7 @@ void AudioStreamer::ProcessAudioData(obs_source_t *source, const struct audio_da
 					const float *in_ptr = reinterpret_cast<const float *>(audio_data->data[ch]);
 					sum += in_ptr[i];
 				}
-				mono_float[i] = sum / static_cast<float>(channels);
+				mono_float[i] = (sum / static_cast<float>(channels)) * transcription_gain;
 			}
 
 			// Step 2: Resample from source rate to 16kHz
