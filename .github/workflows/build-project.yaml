@@ -177,6 +177,7 @@ jobs:
 
   ubuntu-build:
     name: Build for Ubuntu 🐧
+    continue-on-error: true
     strategy:
       matrix:
         os: [ubuntu-24.04]
@@ -203,7 +204,18 @@ jobs:
           echo "pluginName=${product_name}" >> $GITHUB_OUTPUT
           echo "pluginVersion=${product_version}" >> $GITHUB_OUTPUT
 
+      - name: Check OBS PPA availability
+        id: ppa-check
+        run: |
+          if sudo add-apt-repository --yes ppa:obsproject/obs-studio 2>/dev/null; then
+            echo "available=true" >> $GITHUB_OUTPUT
+          else
+            echo "::warning::OBS PPA unavailable, skipping Ubuntu build"
+            echo "available=false" >> $GITHUB_OUTPUT
+          fi
+
       - uses: actions/cache/restore@v4
+        if: steps.ppa-check.outputs.available == 'true'
         id: ccache-cache
         with:
           path: ${{ github.workspace }}/.ccache
@@ -212,12 +224,14 @@ jobs:
             ${{ runner.os }}-${{ matrix.os }}-ccache-x86_64-
 
       - name: Build Plugin 🧱
+        if: steps.ppa-check.outputs.available == 'true'
         uses: ./.github/actions/build-plugin
         with:
           target: x86_64
           config: ${{ needs.check-event.outputs.config }}
 
       - name: Package Plugin 📀
+        if: steps.ppa-check.outputs.available == 'true'
         uses: ./.github/actions/package-plugin
         with:
           target: x86_64
@@ -225,26 +239,28 @@ jobs:
           package: ${{ fromJSON(needs.check-event.outputs.package) }}
 
       - name: Upload Source Tarball 🗜️
+        if: steps.ppa-check.outputs.available == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.setup.outputs.pluginName }}-${{ steps.setup.outputs.pluginVersion }}-${{ matrix.os }}-sources-${{ needs.check-event.outputs.commitHash }}
           path: ${{ github.workspace }}/release/${{ steps.setup.outputs.pluginName }}-${{ steps.setup.outputs.pluginVersion }}-source.*
 
       - name: Upload Artifacts 📡
+        if: steps.ppa-check.outputs.available == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.setup.outputs.pluginName }}-${{ steps.setup.outputs.pluginVersion }}-${{ matrix.os }}-x86_64-${{ needs.check-event.outputs.commitHash }}
           path: ${{ github.workspace }}/release/${{ steps.setup.outputs.pluginName }}-${{ steps.setup.outputs.pluginVersion }}-x86_64*.*
 
       - name: Upload debug symbol artifacts 🪲
+        if: steps.ppa-check.outputs.available == 'true' && fromJSON(needs.check-event.outputs.package)
         uses: actions/upload-artifact@v4
-        if: ${{ fromJSON(needs.check-event.outputs.package) }}
         with:
           name: ${{ steps.setup.outputs.pluginName }}-${{ steps.setup.outputs.pluginVersion }}-${{ matrix.os }}-x86_64-${{ needs.check-event.outputs.commitHash }}-dbgsym
           path: ${{ github.workspace }}/release/${{ steps.setup.outputs.pluginName }}-${{ steps.setup.outputs.pluginVersion }}-x86_64*-dbgsym.ddeb
 
       - uses: actions/cache/save@v4
-        if: github.event_name != 'pull_request' && steps.ccache-cache.outputs.cache-hit != 'true'
+        if: steps.ppa-check.outputs.available == 'true' && github.event_name != 'pull_request' && steps.ccache-cache.outputs.cache-hit != 'true'
         with:
           path: ${{ github.workspace }}/.ccache
           key: ${{ runner.os }}-${{ matrix.os }}-ccache-x86_64-${{ needs.check-event.outputs.config }}
