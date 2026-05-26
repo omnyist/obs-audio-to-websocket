@@ -60,3 +60,6 @@ release-portable/
 
 # "Agents"
 CLAUDE.local.md
+
+# Claude
+.claude/
