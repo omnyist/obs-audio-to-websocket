@@ -1,302 +1,157 @@
 # OBS Audio to WebSocket Plugin
 
-[![Build Status](https://github.com/bryanveloso/obs-audio-to-websocket/actions/workflows/push.yaml/badge.svg)](https://github.com/bryanveloso/obs-audio-to-websocket/actions/workflows/push.yaml)
+[![Build Status](https://github.com/omnyist/obs-audio-to-websocket/actions/workflows/push.yaml/badge.svg)](https://github.com/omnyist/obs-audio-to-websocket/actions/workflows/push.yaml)
 
-A lightweight OBS Studio plugin that streams real-time audio data from OBS sources to WebSocket endpoints for remote processing and analysis.
+An OBS Studio plugin that streams the audio of one OBS source to a WebSocket server, live. It is built for speech-to-text: the audio is sent as 16 kHz, mono, 16-bit PCM, which is what most speech recognizers want.
+
+The plugin taps the source **after its filters** (noise suppression, compressor, limiter and so on), so the server hears what you set up in OBS, not the raw device.
 
 ## Features
 
-- Stream audio from any OBS audio source to WebSocket endpoints
-- Automatic reconnection with exponential backoff
-- Auto-connect on OBS startup (optional setting)
-- Binary protocol for efficient audio data transmission
-- Real-time connection status and data rate monitoring
-- Simple UI integrated into OBS Tools menu
-- Support for multiple audio formats (48kHz, 44.1kHz, etc.)
+- Streams any OBS audio source, such as your microphone, to a WebSocket server
+- Audio is sent after the source's OBS filters
+- 16 kHz mono 16-bit PCM, no header, ready for speech recognizers
+- Adjustable gain on the outgoing audio (does not change your stream or recording)
+- Reconnects automatically with exponential backoff
+- Optional auto-connect whenever you start streaming in OBS
+- Live level meter, connection status and data rate in the OBS Tools menu
+- Settings dialog in English and Russian (follows the OBS language)
 
 ## System Requirements
 
-### For Users
-- OBS Studio 31.0 or higher
-- Windows 10/11, macOS 11+, or Linux
+- OBS Studio 31.0 or newer
+- Windows 10/11, macOS 11+ (Apple Silicon and Intel), or Linux
 
-### For Building from Source
-- CMake 3.28 or higher
-- Qt6
-- WebSocket++ 0.8.2
-- Asio 1.12.1 (standalone)
-- nlohmann/json
-- C++17 compatible compiler
+## Installation
+
+Download the build for your platform from the [Releases page](https://github.com/omnyist/obs-audio-to-websocket/releases), then close OBS and install it.
+
+**Windows**
+- Run the installer (.exe) if there is one, or extract the .zip and copy:
+  - `obs-audio-to-websocket.dll` to `C:\Program Files\obs-studio\obs-plugins\64bit\`
+  - the data folder to `C:\Program Files\obs-studio\data\obs-plugins\obs-audio-to-websocket\`
+
+**macOS**
+- Run the .pkg, or extract the .tar.xz and copy the `.plugin` bundle to `~/Library/Application Support/obs-studio/plugins/`.
+- Releases are not signed or notarized yet. If macOS refuses to open the .pkg, right-click it and choose Open, or allow it under System Settings → Privacy & Security.
+
+**Linux**
+- Install the .deb if the release has one, or build from source (below).
+
+Start OBS again. The settings live under **Tools → Audio to WebSocket Settings**.
 
 ## Quick Start
 
-1. Download the latest release for your platform from the [Releases page](https://github.com/bryanveloso/obs-audio-to-websocket/releases)
-2. Install the plugin (see Installation section below)
-3. Restart OBS Studio
-4. Go to Tools → Audio to WebSocket Settings
-5. Enter your WebSocket server URL and select an audio source
-6. Click Connect and Start Streaming
+1. Start your WebSocket server (see [Writing a server](#writing-a-server)).
+2. In OBS, open Tools → Audio to WebSocket Settings.
+3. Set the URL, for example `ws://localhost:8889/audio`. Only `ws://` is supported, not `wss://`.
+4. Pick your audio source. Microphones are listed first.
+5. Leave **Gain** at `1.0x` unless the server needs a louder signal (see [Gain](#gain)).
+6. Click Start Streaming. The status line shows when the connection is up.
+
+Auto-connect: with "Auto-connect when streaming starts" checked, the plugin connects when you start streaming in OBS and disconnects when you stop. It does not start on its own when OBS launches. Use the button if you want audio flowing while you are not live.
+
+## Using it with Google Speech-to-Text
+
+Google's streaming API takes a gRPC stream, not a WebSocket, so a small server of your own sits in between: the plugin connects to it, and it forwards the audio to Google. That is your Twitch bot, or a small process beside it.
+
+What the plugin sends matches what Google asks for:
+
+| Google setting | Value |
+|---|---|
+| Encoding | `LINEAR16` |
+| Sample rate | `16000` Hz |
+| Channels | 1 (mono) |
+
+Things to know from Google's docs:
+
+- A streaming request is limited to about 5 minutes of audio, so the bot has to open a fresh recognition stream before then and keep feeding it.
+- Each message sent to Google can carry at most 25 KB of audio. The plugin's WebSocket messages are far smaller than that (a few hundred bytes to about a kilobyte).
+- Audio must arrive at roughly real-time speed, which it does.
+
+See Google's [streaming recognition guide](https://docs.cloud.google.com/speech-to-text/docs/streaming-recognize) for client code in your language.
+
+## Writing a server
+
+The plugin is the WebSocket **client**, so your program has to listen. Each binary message is a slice of raw audio, with no header; there are no text messages to parse.
+
+```javascript
+import { WebSocketServer } from 'ws';
+
+const wss = new WebSocketServer({ port: 8889 });
+
+wss.on('connection', (socket) => {
+  console.log('OBS connected');
+
+  socket.on('message', (data, isBinary) => {
+    if (!isBinary) return;
+    // data is a Buffer of 16 kHz, mono, signed 16-bit little-endian PCM.
+    // Write it to your speech recognizer's input stream here.
+    console.log(`got ${data.length} bytes`);
+  });
+
+  socket.on('close', () => console.log('OBS disconnected'));
+});
+```
+
+The default URL in the plugin is `ws://localhost:8889/audio`. This server accepts any path, so that works as is.
+
+## Gain
+
+The Gain setting multiplies the audio before it is sent. It only affects what goes over the WebSocket, not your stream, recording or monitoring.
+
+- `1.0x` sends the source exactly as it comes out of its filters. Use this when the source already goes through a compressor or limiter, or the level looks healthy in the OBS mixer.
+- Raise it only if the recognizer struggles with a quiet source. Anything pushed past full scale is clipped, which makes recognition worse, not better.
+
+## Audio format
+
+What is sent for every audio message:
+
+- 16-bit signed PCM, little-endian
+- 16 kHz sample rate
+- Mono (all OBS channels are averaged together)
+- No header and no control messages, just audio bytes
+
+If the OBS audio sample rate is 16 kHz or lower, the audio is sent at that rate without resampling.
+
+While the source is muted in OBS, nothing is sent.
+
+## Troubleshooting
+
+### Connection
+- Make sure the server is running before you click Start Streaming
+- Check the URL starts with `ws://` and the port matches your server
+- Check firewall settings if the server is on another machine
+- The plugin retries with a growing delay, up to 10 attempts, then stops and says so
+
+### Audio
+- Check the source is not muted in OBS
+- Check the level meter in the settings dialog moves when you talk
+- The OBS log shows a warning after about 10 seconds of silence
+
+### Logs
+Messages from the plugin start with `[Audio to WebSocket]` in OBS's log (Help → Log Files).
 
 ## Building
 
 This plugin uses the official OBS plugin template build system.
 
-### Prerequisites
-
-1. Install Git
-2. Install CMake 3.28 or higher
-3. Install compiler toolchain:
-   - **Windows**: Visual Studio 2022
-   - **macOS**: Xcode 14.0 or higher
-   - **Linux**: GCC 11 or higher
-
-### Building from Source
-
-#### Platform-Specific Setup
-
-**Windows:**
-- Dependencies are automatically downloaded and built by the build scripts
-- No manual installation required
-
-**macOS:**
-```bash
-brew install nlohmann-json
-# WebSocket++ and Asio will be automatically downloaded if not found
-```
-
-**Linux (Ubuntu/Debian):**
-```bash
-sudo apt-get install nlohmann-json3-dev
-# WebSocket++ and Asio will be automatically downloaded if not found
-```
-
-#### Build Commands
+Requirements: CMake 3.28+, Qt6 and a C++17 compiler (Visual Studio 2022 on Windows, Xcode 14+ on macOS, GCC 11+ on Linux). On macOS and Linux you also need nlohmann-json (`brew install nlohmann-json` or `sudo apt-get install nlohmann-json3-dev`). WebSocket++ and Asio are downloaded automatically.
 
 ```bash
-# Clone the repository
-git clone https://github.com/bryanveloso/obs-audio-to-websocket.git
+git clone https://github.com/omnyist/obs-audio-to-websocket.git
 cd obs-audio-to-websocket
 
-# Configure and build
-cmake --preset windows-x64           # For Windows x64
-cmake --preset macos-arm64          # For macOS (Apple Silicon)
-cmake --preset ubuntu-x86_64        # For Linux x64
-
-cmake --build --preset windows-x64   # Build for Windows
-cmake --build --preset macos-arm64  # Build for macOS
-cmake --build --preset ubuntu-x86_64 # Build for Linux
+cmake --preset macos            # or windows-x64, ubuntu-x86_64
+cmake --build --preset macos
 ```
 
-The built plugin will be in the `release` folder.
-
-### GitHub Actions
-
-The project includes GitHub Actions workflows for automated building:
-- Push to `main` branch triggers builds for all platforms
-- Pull requests automatically build and test changes
-- Build artifacts are available for download from successful workflow runs
-
-## Installation
-
-1. Download the appropriate installer or archive from the [Releases page](https://github.com/bryanveloso/obs-audio-to-websocket/releases)
-2. Install using the method for your platform:
-
-   **Windows**: 
-   - Run the installer (.exe) if available, or
-   - Extract the .zip and copy:
-     - `obs-audio-to-websocket.dll` to `C:\Program Files\obs-studio\obs-plugins\64bit\`
-     - Data files to `C:\Program Files\obs-studio\data\obs-plugins\obs-audio-to-websocket\`
-   
-   **macOS**: 
-   - Run the installer (.pkg) if available, or
-   - Extract and copy the `.plugin` bundle to `~/Library/Application Support/obs-studio/plugins/`
-   
-   **Linux**: 
-   - Install the .deb package (Ubuntu/Debian), or
-   - Extract and copy to `/usr/share/obs/obs-plugins/` or `~/.config/obs-studio/plugins/`
-
-## Usage
-
-1. Launch OBS Studio
-2. Go to Tools → Audio to WebSocket Settings
-3. Configure the WebSocket endpoint (default: `ws://localhost:8889/audio`)
-4. Select your audio source
-5. (Optional) Enable "Auto-Connect on Startup" to automatically start streaming when OBS launches
-6. Click "Connect" to establish WebSocket connection
-7. Click "Start Streaming" to begin audio streaming
-
-### Auto-Connect Feature
-
-The auto-connect feature allows the plugin to automatically establish a WebSocket connection and begin streaming whenever OBS starts up. This is useful for automated setups where you want audio streaming to begin without manual intervention.
-
-To enable auto-connect:
-1. Open Tools → Audio to WebSocket Settings
-2. Check the "Auto-Connect on Startup" checkbox
-3. Click "Save" or close the dialog
-
-When enabled, the plugin will:
-- Automatically connect to the configured WebSocket URL on OBS startup
-- Begin streaming audio from the selected source immediately
-- Show connection status in the OBS log
-
-**Note**: Auto-connect only works if you have previously configured a valid WebSocket URL and audio source.
-
-## WebSocket Protocol
-
-The plugin sends audio data as **binary WebSocket messages** with the following format:
-
-### Binary Message Structure
-
-All multi-byte values are in **little-endian** format.
-
-#### Header (28 bytes)
-| Offset | Size | Type   | Description |
-|--------|------|--------|-------------|
-| 0      | 8    | uint64 | Timestamp (nanoseconds since epoch) |
-| 8      | 4    | uint32 | Sample rate (Hz, e.g., 48000) |
-| 12     | 4    | uint32 | Channel count (e.g., 2 for stereo) |
-| 16     | 4    | uint32 | Bit depth (always 16) |
-| 20     | 4    | uint32 | Source ID string length |
-| 24     | 4    | uint32 | Source name string length |
-
-#### Variable Length Data
-| Offset | Size | Type | Description |
-|--------|------|------|-------------|
-| 28     | Variable | UTF-8 | Source ID (no null terminator) |
-| 28 + sourceIdLen | Variable | UTF-8 | Source name (no null terminator) |
-| 28 + sourceIdLen + sourceNameLen | Remaining | Binary | 16-bit signed PCM audio data (little-endian, interleaved) |
-
-### Audio Data Format
-- **Format**: 16-bit signed PCM (NOT float32 or unsigned)
-- **Byte Order**: Little-endian
-- **Channel Layout**: Interleaved (L,R,L,R,... for stereo)
-- **Sample Range**: -32768 to 32767
-
-### Example Client Implementation
-
-#### JavaScript/Node.js
-```javascript
-ws.on('message', (data) => {
-  if (typeof data === 'string') {
-    // Control messages (JSON)
-    const msg = JSON.parse(data);
-    console.log('Control message:', msg.type);
-    return;
-  }
-  
-  // Binary audio data
-  const buffer = Buffer.from(data);
-  let offset = 0;
-  
-  // Read header
-  const timestamp = buffer.readBigUInt64LE(offset); offset += 8;
-  const sampleRate = buffer.readUInt32LE(offset); offset += 4;
-  const channels = buffer.readUInt32LE(offset); offset += 4;
-  const bitDepth = buffer.readUInt32LE(offset); offset += 4;
-  const sourceIdLen = buffer.readUInt32LE(offset); offset += 4;
-  const sourceNameLen = buffer.readUInt32LE(offset); offset += 4;
-  
-  // Read strings
-  const sourceId = buffer.toString('utf8', offset, offset + sourceIdLen);
-  offset += sourceIdLen;
-  const sourceName = buffer.toString('utf8', offset, offset + sourceNameLen);
-  offset += sourceNameLen;
-  
-  // Audio data is the rest
-  const audioData = buffer.slice(offset);
-  
-  // Process 16-bit signed PCM samples
-  const samples = new Int16Array(audioData.buffer, audioData.byteOffset, audioData.length / 2);
-  
-  console.log(`Audio: ${sampleRate}Hz, ${channels}ch, ${samples.length} samples`);
-});
-```
-
-#### Python
-```python
-import struct
-import numpy as np
-
-def parse_audio_message(data):
-    offset = 0
-    
-    # Parse header (little-endian)
-    timestamp = struct.unpack('<Q', data[offset:offset+8])[0]; offset += 8
-    sample_rate = struct.unpack('<I', data[offset:offset+4])[0]; offset += 4
-    channels = struct.unpack('<I', data[offset:offset+4])[0]; offset += 4
-    bit_depth = struct.unpack('<I', data[offset:offset+4])[0]; offset += 4
-    source_id_len = struct.unpack('<I', data[offset:offset+4])[0]; offset += 4
-    source_name_len = struct.unpack('<I', data[offset:offset+4])[0]; offset += 4
-    
-    # Parse strings
-    source_id = data[offset:offset+source_id_len].decode('utf-8')
-    offset += source_id_len
-    source_name = data[offset:offset+source_name_len].decode('utf-8')
-    offset += source_name_len
-    
-    # Parse audio data as 16-bit signed integers
-    audio_bytes = data[offset:]
-    audio_samples = np.frombuffer(audio_bytes, dtype='<i2')  # little-endian int16
-    
-    # Reshape if stereo
-    if channels == 2:
-        audio_samples = audio_samples.reshape(-1, 2)
-    
-    return {
-        'timestamp': timestamp,
-        'sample_rate': sample_rate,
-        'channels': channels,
-        'samples': audio_samples
-    }
-```
-
-### Control Messages (JSON)
-The plugin also sends JSON control messages:
-```json
-{
-  "type": "start",
-  "timestamp": 1234567890123456
-}
-```
-
-```json
-{
-  "type": "stop",
-  "timestamp": 1234567890123456
-}
-```
-
-## Configuration
-
-Settings are automatically saved in OBS configuration:
-- WebSocket URL (default: `ws://localhost:8889/audio`)
-- Selected audio source
-- Auto-connect on startup setting
-- Connection state is maintained across OBS restarts
-
-## Troubleshooting
-
-### Connection Issues
-- Ensure the WebSocket server is running and accessible
-- Check firewall settings
-- Verify the URL format (ws:// or wss://)
-
-### Audio Issues
-- Ensure the audio source is active in OBS
-- Check that the source is not muted
-- Verify audio levels in OBS mixer
-
-### Build Issues
-- Ensure CMake 3.28+ is installed
-- Verify your compiler supports C++17
-- On Windows: Visual Studio 2022 with C++ workload required
-- On macOS: Xcode 14+ with command line tools
-- Dependencies are automatically downloaded during build
+GitHub Actions builds every push to `main`, and builds the release packages for tagged versions.
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit issues or pull requests.
+Contributions are welcome. Issues and pull requests are open.
 
 ## License
 
-This project is licensed under the GPL-2.0 License - same as OBS Studio.
+GPL-2.0, the same as OBS Studio.
