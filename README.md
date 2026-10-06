@@ -6,6 +6,18 @@ An OBS Studio plugin that streams the audio of one OBS source to a WebSocket ser
 
 The plugin taps the source **after its filters** (noise suppression, compressor, limiter and so on), so the server hears what you set up in OBS, not the raw device.
 
+## At a glance
+
+If you're wiring this into a bot or script, or an assistant is helping you do it, these are the facts that matter:
+
+- **The plugin is the WebSocket client.** Your program runs a WebSocket server on the URL you set in the plugin (default `ws://localhost:8889/audio`). OBS connects to it, not the other way round.
+- **Only `ws://` works.** There is no TLS, so `wss://` URLs are rejected.
+- **The payload is raw audio.** Every message is binary: 16 kHz, mono, signed 16-bit little-endian PCM. There is no header, and there are no JSON or text messages.
+- **It's the processed audio.** The plugin taps the source after its OBS filters, so what your server receives is what you hear after your noise suppression, compressor and so on. Nothing is sent while the source is muted.
+- **Google Speech-to-Text can't take a WebSocket directly.** Your server forwards the audio to Google's streaming API as `LINEAR16`, 16000 Hz, 1 channel. See [Using it with Google Speech-to-Text](#using-it-with-google-speech-to-text).
+- **Gain defaults to 1x.** Leave it there for audio that already has a limiter or compressor; more gain clips.
+- **Auto-connect follows your OBS stream.** It connects when you start streaming and disconnects when you stop. It does not start when OBS launches. Use Start Streaming in the dialog if you want audio flowing while you're offline.
+
 ## Features
 
 - Streams any OBS audio source, such as your microphone, to a WebSocket server
