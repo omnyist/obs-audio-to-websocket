@@ -27,9 +27,8 @@ The plugin taps the source **after its filters** (noise suppression, compressor,
 Download the build for your platform from the [Releases page](https://github.com/omnyist/obs-audio-to-websocket/releases), then close OBS and install it.
 
 **Windows**
-- Run the installer (.exe) if there is one, or extract the .zip and copy:
-  - `obs-audio-to-websocket.dll` to `C:\Program Files\obs-studio\obs-plugins\64bit\`
-  - the data folder to `C:\Program Files\obs-studio\data\obs-plugins\obs-audio-to-websocket\`
+- Run the installer (`...-windows-x64.exe`). This is the easy way.
+- Or extract `...-windows-x64-Portable.zip` into your OBS folder (usually `C:\Program Files\obs-studio\`) so that its `obs-plugins` and `data` folders merge with OBS's own. The `locale` files must end up in `data\obs-plugins\obs-audio-to-websocket\`, or the settings window shows raw label names instead of text.
 
 **macOS**
 - Run the .pkg, or extract the .tar.xz and copy the `.plugin` bundle to `~/Library/Application Support/obs-studio/plugins/`.
