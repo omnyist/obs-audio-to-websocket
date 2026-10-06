@@ -38,7 +38,7 @@
   },
   "name": "obs-audio-to-websocket",
   "displayName": "OBS Audio to WebSocket",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "bryanveloso",
   "website": "https://github.com/bryanveloso/obs-audio-to-websocket",
   "email": "bryan@velo.so",
