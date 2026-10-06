@@ -113,6 +113,11 @@ void AudioStreamer::LoadSettings()
 
 	bool autoConnect = config_get_bool(config, "AudioStreamer", "AutoConnect");
 	m_autoConnectEnabled.store(autoConnect);
+
+	if (config_has_user_value(config, "AudioStreamer", "TranscriptionGain")) {
+		m_transcriptionGain.store(
+			static_cast<float>(config_get_double(config, "AudioStreamer", "TranscriptionGain")));
+	}
 }
 
 void AudioStreamer::ConnectToWebSocket()
@@ -165,7 +170,7 @@ void AudioStreamer::AttachAudioSource()
 	m_audioSource = OBSSourceWrapper(m_audioSourceName);
 	if (!m_audioSource) {
 		blog(LOG_ERROR, "[Audio to WebSocket] Audio source '%s' not found", m_audioSourceName.c_str());
-		emit errorOccurred(QString("Audio source not found"));
+		emit errorOccurred(QString::fromUtf8(obs_module_text("AudioSourceNotFound")));
 		// Stop streaming if source attachment fails
 		if (m_streaming) {
 			Stop();
@@ -176,7 +181,7 @@ void AudioStreamer::AttachAudioSource()
 	// Verify it's an audio source
 	if (!m_audioSource.is_audio_source()) {
 		blog(LOG_ERROR, "[Audio to WebSocket] Source '%s' is not an audio source", m_audioSourceName.c_str());
-		emit errorOccurred(QString("Selected source is not an audio source"));
+		emit errorOccurred(QString::fromUtf8(obs_module_text("SourceNotAudio")));
 		m_audioSource.reset();
 		// Stop streaming if source attachment fails
 		if (m_streaming) {
@@ -343,9 +348,9 @@ void AudioStreamer::ProcessAudioData(obs_source_t *source, const struct audio_da
 			// Work in float space throughout to avoid quantization artifacts
 
 			// Step 1: Downmix to mono float by averaging all channels
-			// Apply gain boost for VAD sensitivity (transcription path only,
-			// does not affect OBS output or stream mix)
-			constexpr float transcription_gain = 4.0f;
+			// Apply the user-set gain (transcription path only, does not
+			// affect OBS output or stream mix)
+			const float transcription_gain = m_transcriptionGain.load();
 			std::vector<float> mono_float(frames);
 			for (size_t i = 0; i < frames; ++i) {
 				float sum = 0.0f;

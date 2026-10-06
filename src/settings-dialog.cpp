@@ -16,7 +16,10 @@
 #include <QMessageBox>
 #include <QUrl>
 #include <QCheckBox>
+#include <QDoubleSpinBox>
+#include <QSignalBlocker>
 #include <obs.h>
+#include <obs-module.h>
 #include <obs-frontend-api.h>
 
 #ifndef UNUSED_PARAMETER
@@ -24,6 +27,13 @@
 #endif
 
 namespace obs_audio_to_websocket {
+
+namespace {
+QString T(const char *key)
+{
+	return QString::fromUtf8(obs_module_text(key));
+}
+} // namespace
 
 SettingsDialog::SettingsDialog(QWidget *parent) : QDialog(parent), m_streamer(&AudioStreamer::Instance())
 {
@@ -48,43 +58,43 @@ SettingsDialog::~SettingsDialog()
 
 void SettingsDialog::setupUi()
 {
-	setWindowTitle("Audio to WebSocket Settings");
-	setFixedSize(450, 400);
+	setWindowTitle(T("AudioStreamerSettings"));
+	setFixedSize(450, 440);
 
 	auto *mainLayout = new QVBoxLayout(this);
 
 	// Connection Settings Group
-	auto *connectionGroup = new QGroupBox("WebSocket Connection", this);
+	auto *connectionGroup = new QGroupBox(T("WebSocketConnection"), this);
 	auto *connectionLayout = new QGridLayout(connectionGroup);
 
-	connectionLayout->addWidget(new QLabel("URL:", this), 0, 0);
+	connectionLayout->addWidget(new QLabel(T("URL"), this), 0, 0);
 	m_urlEdit = new QLineEdit(this);
 	m_urlEdit->setPlaceholderText("ws://localhost:8889/audio");
 	connectionLayout->addWidget(m_urlEdit, 0, 1, 1, 2);
 
-	m_testButton = new QPushButton("Test Connection", this);
+	m_testButton = new QPushButton(T("TestConnection"), this);
 	connectionLayout->addWidget(m_testButton, 0, 3);
 
-	m_autoConnectCheckBox = new QCheckBox("Auto-connect when streaming starts", this);
+	m_autoConnectCheckBox = new QCheckBox(T("AutoConnect"), this);
 	connectionLayout->addWidget(m_autoConnectCheckBox, 1, 0, 1, 4);
 
 	mainLayout->addWidget(connectionGroup);
 
 	// Audio Settings Group
-	auto *audioGroup = new QGroupBox("Audio Settings", this);
+	auto *audioGroup = new QGroupBox(T("AudioSettings"), this);
 	auto *audioLayout = new QGridLayout(audioGroup);
 
-	audioLayout->addWidget(new QLabel("Source:", this), 0, 0);
+	audioLayout->addWidget(new QLabel(T("Source"), this), 0, 0);
 	m_audioSourceCombo = new QComboBox(this);
 	audioLayout->addWidget(m_audioSourceCombo, 0, 1, 1, 2);
 
-	m_refreshButton = new QPushButton("Refresh", this);
+	m_refreshButton = new QPushButton(T("Refresh"), this);
 	m_refreshButton->setMaximumWidth(80);
 	connect(m_refreshButton, &QPushButton::clicked, this, &SettingsDialog::populateAudioSources);
 	audioLayout->addWidget(m_refreshButton, 0, 3);
 
 	// Audio level indicator
-	audioLayout->addWidget(new QLabel("Level:", this), 1, 0);
+	audioLayout->addWidget(new QLabel(T("Level"), this), 1, 0);
 	m_audioLevelBar = new QProgressBar(this);
 	m_audioLevelBar->setRange(0, 100);
 	m_audioLevelBar->setValue(0);
@@ -101,17 +111,27 @@ void SettingsDialog::setupUi()
 				       "}");
 	audioLayout->addWidget(m_audioLevelBar, 1, 1, 1, 3);
 
+	audioLayout->addWidget(new QLabel(T("Gain"), this), 2, 0);
+	m_gainSpinBox = new QDoubleSpinBox(this);
+	m_gainSpinBox->setRange(1.0, 8.0);
+	m_gainSpinBox->setSingleStep(0.5);
+	m_gainSpinBox->setDecimals(1);
+	m_gainSpinBox->setSuffix("x");
+	m_gainSpinBox->setValue(1.0);
+	m_gainSpinBox->setToolTip(T("GainTooltip"));
+	audioLayout->addWidget(m_gainSpinBox, 2, 1);
+
 	mainLayout->addWidget(audioGroup);
 
 	// Status Group
-	auto *statusGroup = new QGroupBox("Status", this);
+	auto *statusGroup = new QGroupBox(T("Status"), this);
 	auto *statusLayout = new QVBoxLayout(statusGroup);
 
-	m_statusLabel = new QLabel("Not Streaming", this);
+	m_statusLabel = new QLabel(T("NotStreaming"), this);
 	m_statusLabel->setStyleSheet("QLabel { font-weight: bold; }");
 	statusLayout->addWidget(m_statusLabel);
 
-	m_dataRateLabel = new QLabel("Data Rate: 0.0 KB/s", this);
+	m_dataRateLabel = new QLabel(T("DataRate").arg(0.0, 0, 'f', 1), this);
 	statusLayout->addWidget(m_dataRateLabel);
 
 	m_muteStatusLabel = new QLabel("", this);
@@ -123,12 +143,12 @@ void SettingsDialog::setupUi()
 	// Control Buttons
 	auto *buttonLayout = new QHBoxLayout();
 
-	m_startStopButton = new QPushButton("Start Streaming", this);
+	m_startStopButton = new QPushButton(T("StartStreaming"), this);
 	// Enable if audio source is selected
 	m_startStopButton->setEnabled(false);
 	buttonLayout->addWidget(m_startStopButton);
 
-	auto *closeButton = new QPushButton("Close", this);
+	auto *closeButton = new QPushButton(T("Close"), this);
 	connect(closeButton, &QPushButton::clicked, this, &QDialog::close);
 	buttonLayout->addWidget(closeButton);
 
@@ -145,6 +165,8 @@ void SettingsDialog::connectSignals()
 	connect(m_audioSourceCombo, &QComboBox::currentTextChanged, this, &SettingsDialog::onAudioSourceChanged);
 	connect(m_urlEdit, &QLineEdit::textChanged, this, &SettingsDialog::onUrlChanged);
 	connect(m_autoConnectCheckBox, &QCheckBox::toggled, this, &SettingsDialog::onAutoConnectToggled);
+	connect(m_gainSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
+		&SettingsDialog::onGainChanged);
 
 	// Connect thread-safe test connection error signal
 	connect(this, &SettingsDialog::testConnectionError, this, &SettingsDialog::onTestConnectionError,
@@ -165,6 +187,13 @@ void SettingsDialog::loadSettings()
 #else
 	config_t *config = obs_frontend_get_profile_config();
 #endif
+
+	// Setting a widget below would otherwise fire its change slot, which saves every
+	// field and overwrites the stored values before they are read.
+	const QSignalBlocker urlBlocker(m_urlEdit);
+	const QSignalBlocker sourceBlocker(m_audioSourceCombo);
+	const QSignalBlocker autoConnectBlocker(m_autoConnectCheckBox);
+	const QSignalBlocker gainBlocker(m_gainSpinBox);
 
 	const char *url = config_get_string(config, "AudioStreamer", "WebSocketUrl");
 	if (url && strlen(url) > 0) {
@@ -188,12 +217,14 @@ void SettingsDialog::loadSettings()
 	bool autoConnect = config_get_bool(config, "AudioStreamer", "AutoConnect");
 	m_autoConnectCheckBox->setChecked(autoConnect);
 	m_streamer->SetAutoConnectEnabled(autoConnect);
+
+	m_gainSpinBox->setValue(static_cast<double>(m_streamer->GetTranscriptionGain()));
 }
 
 bool SettingsDialog::saveSettings()
 {
 	// Silently fail if UI elements don't exist yet
-	if (!m_urlEdit || !m_audioSourceCombo || !m_autoConnectCheckBox) {
+	if (!m_urlEdit || !m_audioSourceCombo || !m_autoConnectCheckBox || !m_gainSpinBox) {
 		return false;
 	}
 
@@ -216,6 +247,7 @@ bool SettingsDialog::saveSettings()
 	config_set_string(config, "AudioStreamer", "WebSocketUrl", urlStdString.c_str());
 	config_set_string(config, "AudioStreamer", "AudioSource", audioSourceStdString.c_str());
 	config_set_bool(config, "AudioStreamer", "AutoConnect", m_autoConnectCheckBox->isChecked());
+	config_set_double(config, "AudioStreamer", "TranscriptionGain", m_gainSpinBox->value());
 
 	config_save(config);
 	return true;
@@ -234,34 +266,33 @@ void SettingsDialog::onTestConnection()
 {
 	QString url = m_urlEdit->text().trimmed();
 	if (url.isEmpty()) {
-		QMessageBox::warning(this, "No URL", "Please enter a WebSocket URL to test.");
+		QMessageBox::warning(this, T("NoUrl"), T("NoUrlMessage"));
 		return;
 	}
 
 	// Validate URL format
-	if (!url.startsWith("ws://") && !url.startsWith("wss://")) {
-		QMessageBox::warning(this, "Invalid URL", "WebSocket URL must start with ws:// or wss://");
+	if (!url.startsWith("ws://")) {
+		QMessageBox::warning(this, T("InvalidUrl"), T("InvalidUrlScheme"));
 		return;
 	}
 
 	// Basic URL validation - check for host and path
 	QUrl qurl(url);
 	if (!qurl.isValid() || qurl.host().isEmpty()) {
-		QMessageBox::warning(this, "Invalid URL",
-				     "Please enter a valid WebSocket URL.\nExample: ws://localhost:8889/audio");
+		QMessageBox::warning(this, T("InvalidUrl"), T("InvalidUrlMessage"));
 		return;
 	}
 
 	// Test WebSocket connection without affecting current state
 	m_testButton->setEnabled(false);
-	m_testButton->setText("Testing...");
+	m_testButton->setText(T("Testing"));
 
 	// Store original status
 	QString originalStatus = m_statusLabel->text();
 	QString originalStyle = m_statusLabel->styleSheet();
 
 	// Update status to show testing
-	m_statusLabel->setText("Testing connection...");
+	m_statusLabel->setText(T("TestingConnection"));
 	m_statusLabel->setStyleSheet("QLabel { font-weight: bold; color: blue; }");
 
 	// Create a temporary WebSocket client for testing
@@ -277,23 +308,23 @@ void SettingsDialog::onTestConnection()
 	QTimer::singleShot(2000, this, // 2 second timeout
 			   [this, testClient, originalStatus, originalStyle, errorMsg]() {
 				   m_testButton->setEnabled(true);
-				   m_testButton->setText("Test Connection");
+				   m_testButton->setText(T("TestConnection"));
 
 				   if (testClient->IsConnected()) {
 					   testClient->Disconnect();
-					   m_statusLabel->setText("Test successful!");
+					   m_statusLabel->setText(T("TestSuccessful"));
 					   m_statusLabel->setStyleSheet("QLabel { font-weight: bold; color: green; }");
-					   QMessageBox::information(this, "Connection Test",
-								    "Connection test successful!");
+					   QMessageBox::information(this, T("ConnectionTest"),
+								    T("ConnectionTestSuccessful"));
 				   } else {
-					   m_statusLabel->setText("Test failed!");
+					   m_statusLabel->setText(T("TestFailed"));
 					   m_statusLabel->setStyleSheet("QLabel { font-weight: bold; color: red; }");
 
-					   QString message = "Connection test failed.";
+					   QString message = T("ConnectionTestFailed");
 					   if (!errorMsg.isEmpty()) {
 						   message += " " + errorMsg;
 					   }
-					   QMessageBox::warning(this, "Connection Test", message);
+					   QMessageBox::warning(this, T("ConnectionTest"), message);
 				   }
 
 				   // Restore original status after a delay
@@ -331,16 +362,22 @@ void SettingsDialog::onAutoConnectToggled(bool enabled)
 	saveSettings();
 }
 
+void SettingsDialog::onGainChanged(double gain)
+{
+	m_streamer->SetTranscriptionGain(static_cast<float>(gain));
+	saveSettings();
+}
+
 void SettingsDialog::updateConnectionStatus(bool connected)
 {
 	// Update status based on both connection and streaming state
 	if (m_streamer->IsStreaming()) {
 		if (connected) {
 			if (m_streamer->IsAutoConnectEnabled()) {
-				m_statusLabel->setText("Auto-Connect: Active");
+				m_statusLabel->setText(T("AutoConnectActive"));
 				m_statusLabel->setStyleSheet("QLabel { font-weight: bold; color: green; }");
 			} else {
-				m_statusLabel->setText("Streaming (Connected)");
+				m_statusLabel->setText(T("StreamingConnected"));
 				m_statusLabel->setStyleSheet("QLabel { font-weight: bold; color: green; }");
 			}
 		} else {
@@ -348,20 +385,19 @@ void SettingsDialog::updateConnectionStatus(bool connected)
 			auto wsClient = m_streamer->GetWebSocketClient();
 			if (wsClient && wsClient->IsReconnecting()) {
 				int attempts = wsClient->GetReconnectAttempts();
-				m_statusLabel->setText(
-					QString("Streaming (Reconnecting... attempt %1/10)").arg(attempts));
+				m_statusLabel->setText(T("StreamingReconnecting").arg(attempts));
 				m_statusLabel->setStyleSheet("QLabel { font-weight: bold; color: orange; }");
 			} else {
-				m_statusLabel->setText("Streaming (Disconnected)");
+				m_statusLabel->setText(T("StreamingDisconnected"));
 				m_statusLabel->setStyleSheet("QLabel { font-weight: bold; color: red; }");
 			}
 		}
 	} else {
 		if (m_streamer->IsAutoConnectEnabled()) {
-			m_statusLabel->setText("Auto-Connect: Waiting for stream");
+			m_statusLabel->setText(T("AutoConnectWaiting"));
 			m_statusLabel->setStyleSheet("QLabel { font-weight: bold; color: blue; }");
 		} else {
-			m_statusLabel->setText("Not Streaming");
+			m_statusLabel->setText(T("NotStreaming"));
 			m_statusLabel->setStyleSheet("QLabel { font-weight: bold; }");
 		}
 	}
@@ -370,11 +406,11 @@ void SettingsDialog::updateConnectionStatus(bool connected)
 void SettingsDialog::updateStreamingStatus(bool streaming)
 {
 	if (streaming) {
-		m_startStopButton->setText("Stop Streaming");
+		m_startStopButton->setText(T("StopStreaming"));
 		// Disable manual start/stop when auto-connect is enabled
 		if (m_streamer->IsAutoConnectEnabled()) {
 			m_startStopButton->setEnabled(false);
-			m_startStopButton->setToolTip("Auto-connect is controlling the connection");
+			m_startStopButton->setToolTip(T("AutoConnectControlling"));
 		} else {
 			m_startStopButton->setEnabled(true);
 			m_startStopButton->setToolTip("");
@@ -385,7 +421,7 @@ void SettingsDialog::updateStreamingStatus(bool streaming)
 		m_urlEdit->setEnabled(false);
 		m_testButton->setEnabled(false);
 	} else {
-		m_startStopButton->setText("Start Streaming");
+		m_startStopButton->setText(T("StartStreaming"));
 		m_startStopButton->setToolTip("");
 		// Re-enable controls when not streaming
 		m_audioSourceCombo->setEnabled(true);
@@ -402,7 +438,7 @@ void SettingsDialog::updateStreamingStatus(bool streaming)
 
 void SettingsDialog::updateDataRate(double kbps)
 {
-	m_dataRateLabel->setText(QString("Data Rate: %1 kb/s").arg(kbps, 0, 'f', 1));
+	m_dataRateLabel->setText(T("DataRate").arg(kbps, 0, 'f', 1));
 }
 
 void SettingsDialog::showError(const QString &error)
@@ -421,10 +457,10 @@ void SettingsDialog::showError(const QString &error)
 
 	// Handle "max reconnection attempts" specially - this should stop streaming
 	if (error.contains("Max reconnection attempts exceeded")) {
-		m_statusLabel->setText("Not Streaming (Connection Failed)");
+		m_statusLabel->setText(T("NotStreamingConnectionFailed"));
 		m_statusLabel->setStyleSheet("QLabel { font-weight: bold; color: red; }");
 		// Show one final dialog to inform the user
-		QMessageBox::warning(this, "Connection Lost", "Connection failed. Streaming stopped.");
+		QMessageBox::warning(this, T("ConnectionLost"), T("ConnectionLostMessage"));
 		return;
 	}
 
@@ -432,10 +468,10 @@ void SettingsDialog::showError(const QString &error)
 	// Connection status is already shown in the UI status label
 	if (!m_streamer->IsStreaming()) {
 		// Show dialog only when not actively streaming (e.g., during initial setup)
-		QMessageBox::warning(this, "Audio to WebSocket Error", error);
+		QMessageBox::warning(this, T("AudioStreamerError"), error);
 	} else {
 		// During streaming, just update the status label instead of showing a dialog
-		m_statusLabel->setText("Streaming (Connection Error)");
+		m_statusLabel->setText(T("StreamingConnectionError"));
 		m_statusLabel->setStyleSheet("QLabel { font-weight: bold; color: red; }");
 		std::string errorStdString = error.toStdString();
 		blog(LOG_WARNING, "[Audio to WebSocket] Error during streaming: %s", errorStdString.c_str());
@@ -481,7 +517,7 @@ void SettingsDialog::updateStatus()
 			if (m_streamer->IsStreaming()) {
 				bool muted = obs_source_muted(source);
 				if (muted) {
-					m_muteStatusLabel->setText("⚠️ Audio source is MUTED");
+					m_muteStatusLabel->setText(T("SourceMuted"));
 					m_muteStatusLabel->show();
 				} else {
 					m_muteStatusLabel->hide();
@@ -575,7 +611,7 @@ void SettingsDialog::populateAudioSources()
 			m_audioSourceCombo->setCurrentIndex(index);
 		} else {
 			// Source no longer exists, show warning
-			m_statusLabel->setText("Previous source not found");
+			m_statusLabel->setText(T("PreviousSourceNotFound"));
 			m_statusLabel->setStyleSheet("QLabel { font-weight: bold; color: orange; }");
 			QTimer::singleShot(3000, this, [this]() { updateConnectionStatus(m_streamer->IsConnected()); });
 		}

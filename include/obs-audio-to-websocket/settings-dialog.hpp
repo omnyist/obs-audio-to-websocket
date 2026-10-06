@@ -13,6 +13,7 @@ class QComboBox;
 class QLabel;
 class QProgressBar;
 class QCheckBox;
+class QDoubleSpinBox;
 QT_END_NAMESPACE
 
 namespace obs_audio_to_websocket {
@@ -32,6 +33,7 @@ private slots:
 	void onAudioSourceChanged(const QString &source);
 	void onUrlChanged(const QString &url);
 	void onAutoConnectToggled(bool enabled);
+	void onGainChanged(double gain);
 
 	void updateConnectionStatus(bool connected);
 	void updateStreamingStatus(bool streaming);
@@ -63,6 +65,7 @@ private:
 	QCheckBox *m_autoConnectCheckBox;
 	QComboBox *m_audioSourceCombo;
 	QPushButton *m_refreshButton;
+	QDoubleSpinBox *m_gainSpinBox;
 	QPushButton *m_startStopButton;
 	QProgressBar *m_audioLevelBar;
 	QLabel *m_statusLabel;

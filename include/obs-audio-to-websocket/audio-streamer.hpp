@@ -40,6 +40,9 @@ public:
 	void SetAudioSource(const std::string &sourceName);
 	std::string GetAudioSource() const { return m_audioSourceName; }
 
+	void SetTranscriptionGain(float gain) { m_transcriptionGain.store(gain); }
+	float GetTranscriptionGain() const { return m_transcriptionGain.load(); }
+
 	void SetAutoConnectEnabled(bool enabled) { m_autoConnectEnabled.store(enabled); }
 	bool IsAutoConnectEnabled() const { return m_autoConnectEnabled.load(); }
 
@@ -84,12 +87,13 @@ private:
 
 	OBSSourceWrapper m_audioSource;
 	std::string m_audioSourceName;
-	std::string m_wsUrl = "ws://zelan:8765/asr";
+	std::string m_wsUrl = "ws://localhost:8889/audio";
 	bool m_rawPcmMode{true}; // Send 16kHz mono PCM without header (for WhisperLiveKit)
 
 	std::atomic<bool> m_streaming{false};
 	std::atomic<bool> m_shuttingDown{false};
 	std::atomic<bool> m_autoConnectEnabled{false};
+	std::atomic<float> m_transcriptionGain{1.0f};
 	std::atomic<double> m_dataRate{0.0};
 
 	std::recursive_mutex m_sourceMutex;
